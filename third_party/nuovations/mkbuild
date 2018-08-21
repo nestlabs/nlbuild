@@ -1,0 +1,287 @@
+#!/bin/bash
+#
+#    Copyright (c) 2012-2018 Nest Labs, Inc.
+#    All rights reserved.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
+#
+#    Copyright (c) 2010 Nuovation System Designs, LLC
+#    All rights reserved.
+#
+#    IMPORTANT: This software is supplied to you by Nuovation System
+#    Designs, LLC ("Nuovations"). in consideration of your agreement
+#    to the following terms, and your use, installation, modification
+#    or redistribution of this Nuovations software constitutes
+#    acceptance of these terms. If you do not agree with these terms,
+#    please do not use, install, modify or redistribute this
+#    Nuovations software.
+#
+#    In consideration of your agreement to abide by the following
+#    terms, and subject to these terms, Nuovations grants you a
+#    worldwide, non-exclusive license, under Nuovations' copyrights in
+#    this original Nuovations software (the "Nuovations Software"), to
+#    use, reproduce, modify and redistribute the Nuovations Software,
+#    with or without modifications, in source and/or binary forms;
+#    provided that if you redistribute the Nuovations Software in its
+#    entirety and without modifications, you must retain this notice
+#    and the following text and disclaimers in all such
+#    redistributions of the Nuovations Software. Neither the name,
+#    trademarks, service marks or logos of Nuovations may be used to
+#    endorse or promote products derived from the Nuovations Software
+#    without specific prior written permission from Nuovations. Except
+#    as expressly stated in this notice, no other rights or licenses,
+#    express or implied, are granted by Nuovations herein, including
+#    but not limited to any patent rights that may be infringed by
+#    your derivative works or by other works in which the Nuovations
+#    Software may be incorporated.
+#
+#    The Nuovations Software is provided by Nuovations on an "AS IS"
+#    basis. NUOVATIONS MAKES NO WARRANTIES, EXPRESS OR IMPLIED,
+#    INCLUDING WITHOUT LIMITATION THE IMPLIED WARRANTIES OF
+#    NON-INFRINGEMENT, MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+#    PURPOSE, REGARDING THE NUOVATIONS SOFTWARE OR ITS USE AND
+#    OPERATION ALONE OR IN COMBINATION WITH YOUR PRODUCTS.
+#
+#    IN NO EVENT SHALL NUOVATIONS BE LIABLE FOR ANY SPECIAL, INDIRECT,
+#    INCIDENTAL OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+#    TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+#    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) ARISING IN ANY WAY
+#    OUT OF THE USE, REPRODUCTION, MODIFICATION AND/OR DISTRIBUTION OF
+#    THE NUOVATIONS SOFTWARE, HOWEVER CAUSED AND WHETHER UNDER THEORY
+#    OF CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY OR
+#    OTHERWISE, EVEN IF NUOVATIONS HAS BEEN ADVISED OF THE POSSIBILITY
+#    OF SUCH DAMAGE.
+#
+#    Description:
+#      This file generates a build and release header for inclusion in
+#      other source code.
+#
+#      The overall approach, philosophy and information generated
+#      mimics that employed by the Linux build system.
+#
+
+BASENAME=/usr/bin/basename
+CAT=/bin/cat
+CMP=/usr/bin/cmp
+DATE=/bin/date
+PRINTF="/usr/bin/printf"
+GREP=/bin/grep
+HOSTNAME=/bin/hostname
+MV=/bin/mv
+RM=/bin/rm
+TR=/usr/bin/tr
+WHOAMI=/usr/bin/whoami
+
+if [ ! -f ${GREP} ]
+then
+  GREP=/usr/bin/grep
+fi
+
+YEAR_FORMAT=%Y
+MONTH_FORMAT=%-m
+DAY_FORMAT=%-d
+DATE_FORMAT=%F
+TIME_FORMAT=%T%z
+
+OPTIONS="c:g:ho:pq"
+
+OLDEXT=".O"
+NEWEXT=".N"
+
+set -f
+export LC_ALL=C
+
+#
+# usage
+#
+# Display program usage.
+#
+usage() {
+    name=`${BASENAME} "${0}"`
+
+    echo "Usage: ${name} [ options ] image"
+
+    if [ $1 -ne 0 ]; then
+        echo "Try '${name} -h' for more information."
+    fi
+
+    if [ $1 -ne 1 ]; then
+${CAT} << EOF
+  -c string  Specify the compiler version string.
+  -g string  Specify the build generation number string.
+  -h         Print this help, then exit.
+  -o file    Specify the file to output.
+  -p         Prefix generated definitions with image-specific prefix rather
+             than (default: IMAGE_).
+  -q         Run quietly without any informative output.
+EOF
+    fi
+
+    exit ${1}
+}
+
+Verbose() {
+    if [ -z "${QUIET}" ] || [ "${QUIET}" -ne 1 ]; then
+	${PRINTF} "${@}"
+    fi
+}
+
+#
+# Main Program Body
+#
+
+# Parse the command line arguments
+
+while getopts "${OPTIONS}" opt; do
+    case "${opt}" in
+
+    'c')
+	COMPILER_VERSION="${OPTARG}"
+	;;
+
+    'g')
+	GENERATION="${OPTARG}"
+	;;
+
+    'h')
+	usage 0
+	;;
+
+    'o')
+	OUTPUT_FILE="${OPTARG}"
+	;;
+
+    'p')
+        PREFIX=1
+	;;
+
+    'q')
+    	QUIET=1
+	;;
+
+    *)
+	usage 1
+	;;
+
+    esac
+done
+
+# Shift away the arguments already parsed.
+
+shift `expr "${OPTIND}" - 1`    
+
+# At this point, we expect a single argument, the image name.
+
+if [ "$#" -ne 1 ]; then
+    echo "Please specify an image name."
+    usage 1
+
+else
+    IMAGE_NAME="${1}"
+
+fi
+
+# Check that the required compiler, generation, release and output
+# options were supplied.
+
+if [ -z "${COMPILER_VERSION}" ]; then
+    echo "Please specify the compiler version."
+    usage 1
+fi
+
+if [ -z "${GENERATION}" ]; then
+    echo "Please specify a generation number."
+    usage 1
+fi
+
+if [ -z "${OUTPUT_FILE}" ]; then
+    echo "Please specify an output file."
+    usage 1
+fi
+
+if [ -z "${PREFIX}" ] || [ "${PREFIX}" -ne 1 ]; then
+    IMAGE="IMAGE"
+else
+    # Upcase the image name so that it can be used as a prefix for the
+    # preprocessor definitions we will output.
+
+    IMAGE=`${PRINTF} "${IMAGE_NAME}" | ${TR} '[[:lower:]]' '[[:upper:]]' | ${TR} '-' '_'`
+fi
+
+
+# Build up the preprocessor definitions that we intend to generate.
+
+IMAGE_BUILD_NAME="${IMAGE_NAME}"
+IMAGE_BUILD_USER=`${WHOAMI}`
+IMAGE_BUILD_HOST=`${HOSTNAME}`
+IMAGE_BUILD_COMPILER="${COMPILER_VERSION}"
+IMAGE_BUILD_YEAR=`${DATE} +${YEAR_FORMAT}`
+IMAGE_BUILD_MONTH=`${DATE} +${MONTH_FORMAT}`
+IMAGE_BUILD_DAY=`${DATE} +${DAY_FORMAT}`
+IMAGE_BUILD_DATE=`${DATE} +${DATE_FORMAT}`
+IMAGE_BUILD_TIME=`${DATE} +${TIME_FORMAT}`
+IMAGE_BUILD_TIMESTAMP="${IMAGE_BUILD_DATE}T${IMAGE_BUILD_TIME}"
+IMAGE_BUILD_GENERATION="#${GENERATION} ${IMAGE_BUILD_TIMESTAMP}"
+
+# Generate the content and a temporary instance of the output
+# file. We'll rotate the temporary instance in if necessary. Be sure
+# that we DO stick the generation number in the content stream on a
+# line that does NOT contain times or dates as those will get filtered
+# out below for comparison.
+
+( ${PRINTF} "/*\n * This file is automatically generated.\n *\n * Generation: ${GENERATION}\n */\n"
+
+  ${PRINTF} "#define ${IMAGE}_BUILD_NAME        \"${IMAGE_BUILD_NAME}\"\n"
+  ${PRINTF} "#define ${IMAGE}_BUILD_USER        \"${IMAGE_BUILD_USER}\"\n"
+  ${PRINTF} "#define ${IMAGE}_BUILD_HOST        \"${IMAGE_BUILD_HOST}\"\n"
+  ${PRINTF} "#define ${IMAGE}_BUILD_COMPILER    \"${IMAGE_BUILD_COMPILER}\"\n"
+  ${PRINTF} "#define ${IMAGE}_BUILD_YEAR        ${IMAGE_BUILD_YEAR}\n"
+  ${PRINTF} "#define ${IMAGE}_BUILD_MONTH       ${IMAGE_BUILD_MONTH}\n"
+  ${PRINTF} "#define ${IMAGE}_BUILD_DAY         ${IMAGE_BUILD_DAY}\n"
+  ${PRINTF} "#define ${IMAGE}_BUILD_DATE        \"${IMAGE_BUILD_DATE}\"\n"
+  ${PRINTF} "#define ${IMAGE}_BUILD_TIME        \"${IMAGE_BUILD_TIME}\"\n"
+  ${PRINTF} "#define ${IMAGE}_BUILD_GENERATION  \"${IMAGE_BUILD_GENERATION}\"\n"
+) > "${OUTPUT_FILE}${NEWEXT}"
+
+# If the output file already exists, then we need to filter out
+# content we don't care about changing (dates and times) and compare
+# what we just generated with it. If ours is different, rotate it in.
+
+REGEXP="${IMAGE}_BUILD_DATE\|${IMAGE}_BUILD_TIME\|${IMAGE}_BUILD_GENERATION"
+
+if [ -r "${OUTPUT_FILE}" ]; then    
+    ${GREP} -v "${REGEXP}" "${OUTPUT_FILE}"          > "${OUTPUT_FILE}.cmp.a"
+    ${GREP} -v "${REGEXP}" "${OUTPUT_FILE}${NEWEXT}" > "${OUTPUT_FILE}.cmp.b"
+    
+    if ${CMP} -s "${OUTPUT_FILE}.cmp.a" "${OUTPUT_FILE}.cmp.b" ; then
+    	# The files are the same, use theirs
+	${RM} -f "${OUTPUT_FILE}${NEWEXT}"
+
+    else
+    	# The files are different, rotate ours with theirs and remove theirs
+	Verbose "Updating (`${BASENAME} ${0}`) \"${OUTPUT_FILE}\""
+	${MV} -f "${OUTPUT_FILE}"          "${OUTPUT_FILE}${OLDEXT}"
+	${MV} -f "${OUTPUT_FILE}${NEWEXT}" "${OUTPUT_FILE}"
+	${RM} -f "${OUTPUT_FILE}${OLDEXT}"
+
+    fi
+
+    ${RM} -f "${OUTPUT_FILE}.cmp.a" "${OUTPUT_FILE}.cmp.b"
+
+else
+    # The file does not exist, use ours
+    Verbose "Generating (`${BASENAME} ${0}`) \"${OUTPUT_FILE}\""
+    ${MV} -f "${OUTPUT_FILE}${NEWEXT}" "${OUTPUT_FILE}"
+
+fi
+

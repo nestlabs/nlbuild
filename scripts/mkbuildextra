@@ -1,0 +1,269 @@
+#!/bin/bash
+
+#
+#    Copyright (c) 2011-2018 Nest Labs, Inc.
+#    All rights reserved.
+#
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
+
+#
+#    Description:
+#      This file attempts to find and generate prints out any "extra"
+#      information appended to the end of the build / image version,
+#      including the current user name, number of commits from the
+#      last GIT tag and the current GIT hash corresponding to HEAD
+#      for the current branch.
+#
+#      This is largely cobbled together from similar scripts in other
+#      packages that are maintained in GIT (linux, u-boot, etc.).
+#
+#      This can produce extra build version information such as:
+#
+#        dirty
+#        auser
+#        auser-dirty
+#        auser-gab50dbb
+#        auser-gab50dbb-dirty
+#        auser-1.0d163-00032-gab50dbb
+#        auser-1.0d163-00032-gab50dbb-dirty
+#        1.0d163-00032-gab50dbb
+#        1.0d163-00032-gab50dbbdirty
+#
+
+# Constants
+
+ROOTDIR=${PREFIX}/
+
+BINDIR=${ROOTDIR}bin
+DATADIR=${ROOTDIR}share
+DEVICEDIR=${ROOTDIR}dev
+CONFDIR=${ROOTDIR}etc
+LIBDIR=${ROOTDIR}lib
+LIBEXECDIR=${ROOTDIR}libexec
+VARDIR=${ROOTDIR}var
+LOGDIR=${VARDIR}/log
+MANDIR=${ROOTDIR}man
+SBINDIR=${ROOTDIR}sbin
+
+USRDIR=${ROOTDIR}usr
+USRBINDIR=${USRDIR}/bin
+USRDATADIR=${USRDIR}/share
+USRLIBDIR=${USRDIR}/lib
+USRLIBEXECDIR=${USRDIR}/libexec
+USRSBINDIR=${USRDIR}/sbin
+
+AWK=${USRBINDIR}/awk
+BASENAME=${USRBINDIR}/basename
+CAT=${BINDIR}/cat
+ECHO="${BINDIR}/echo -e"
+NULL=${DEVICEDIR}/null
+PRINTF=${USRBINDIR}/printf
+RM=${BINDIR}/rm
+SED=${BINDIR}/sed
+
+EXTRA=""
+
+#
+# usage <status>
+#
+# Description:
+#   This routine prints out the proper command line usage for this
+#   program and then exits with the specified status.
+#
+# Input(s):
+#   status - Exit status to exit the program with.
+#
+# Returns:
+#   This subroutine does not return.
+#
+usage() {
+	local name=`${BASENAME} ${0}`
+
+	${ECHO} "Usage: ${name} [options] [ <project root> ]"
+
+	if [ ${1} -ne 0 ]; then
+		${ECHO} "Try '${name} -h' for more information."
+	fi
+
+	if [ ${1} -ne 1 ]; then
+${CAT} << EOF
+  -b, --build-version=VERSION  Specify VERSION as the build version to generate
+                               extra build information against.
+  -h, --help                   Print this help, then exit.
+  --[no-]git                   Include [exclude] the current GIT repository 
+                               state in [from] the extra build information.
+  --[no-]user                  Include [exclude] the current user in [from] the
+                               extra build information.
+EOF
+	fi
+
+	exit ${1}
+}
+
+#
+# gitextra <extra> <directory> <version>
+#
+# Description:
+#   This routine prints out any "extra" information appended to the
+#   end of the build / image version, including the current user name,
+#   number of commits from the last GIT tag and the current GIT hash
+#   corresponding to HEAD for the current branch.
+#
+# Input(s):
+#   extra     - The current extra string which may be empty.
+#   directory - The current directory.
+#   version   - The optional current version being built / packaged.
+#
+# Returns:
+#   N/A
+#
+gitextra() {
+	local extra="${1}"
+	local dir="${2}"
+	local version="${3}"
+	local head
+	local exact
+	local dtag
+	local gitextra
+
+	# Retrieve the shortened, unique GIT hash associated with the
+	# 'HEAD' GIT object
+
+	head=`git rev-parse --verify --short HEAD 2> ${NULL}`
+
+	# If we found a hash, we are actually in a GIT repository; continue.
+
+	if [ -n "${head}" ]; then
+	    	# Check to see if we have a position in GIT that is
+	    	# exactly at an existing tag (e.g. 1.0d163). If we
+	    	# are, skip it as versions always come from
+	    	# Nest-defined build infrastructure, so we don't
+	    	# bother with version tags in GIT as "extra"
+	    	# content unless a current build version was specified
+		# and the tag version is different from it.
+
+	    	exact="`git describe --exact-match 2> ${NULL}`"
+
+		if [ -z "${exact}" ] || [ -n "${version}" ] && [ "${version}" != "${exact}" ]; then
+			dtag="`git describe 2> ${NULL}`"
+
+			# If we are n commits away from a tag, then
+			# print n and a shortened version of the
+			# hash. Otherwise, just print the hash.
+			#
+			# If we are at an exact version, then there
+			# won't be a delta or a hash, just use the
+			# exact tag.
+
+			if [ -n "${dtag}" ]; then
+				if [ "${dtag}" == "${exact}" ]; then
+					gitextra="${dtag}"
+				else
+					gitextra=`${ECHO} "${dtag}" | ${AWK} -F '-' '{printf("%s-%05d-%s", $(NF-2),$(NF-1),$(NF))}' 2> ${NULL}`
+				fi
+			else
+				gitextra=`${ECHO} "g${head}"`
+			fi
+		fi
+
+		# Update the index if we are in a writable directory
+		# so that we can successfully check for a dirty (has
+		# uncommitted changes or unresolved merges) tree.
+
+		if [ -w "${dir}" ]; then
+			git update-index --refresh --unmerged > ${NULL}
+		fi
+
+		# Now check for such a dirty tree and add to the "extra"
+		# if we found one.
+
+		if git diff-index --name-only HEAD | read dummy; then
+		    	if [ -n "${gitextra}" ]; then
+				gitextra="${gitextra}-dirty"
+			else
+				gitextra="dirty"
+			fi
+    		fi
+	fi
+
+	if [ -n "${extra}" ] && [ -n "${gitextra}" ]; then
+		extra="${extra}-${gitextra}"
+	else
+		extra="${gitextra}"
+	fi
+
+	${PRINTF} "${extra}"
+}
+
+#
+# Main Program Body
+#
+
+while [ ${#} -gt 0 ]; do
+    	if [ ${1:0:1} == "-" ]; then
+		if [ "${1}" == "-h" ] || [ "${1}" == "--help" ]; then
+			usage 0
+
+		elif [ "${1}" == "-b" ] || [ "${1}" == "--build-version" ]; then
+			version="${2}"
+			shift 2
+
+		elif [ "${1}" == "--no-git" ]; then
+			nogit=1
+			shift 1
+
+		elif [ "${1}" == "--git" ]; then
+		    	nogit=0
+			shift 1
+
+		elif [ "${1}" == "--no-user" ]; then
+		    	nouser=1
+			shift 1
+
+		elif [ "${1}" == "--user" ]; then
+			nouser=0
+			shift 1
+
+		else
+		    	${ECHO} "Unknown argument '${1}'."
+			usage 1
+
+		fi
+
+	else
+		break
+
+	fi
+done
+
+if [ ${#} -gt 1 ]; then
+	usage 1
+elif [ ${#} -eq 1 ]; then
+	tree="${1}"
+else
+	tree="."
+fi
+
+if [ -z "${nouser}" ] || [ "${nouser}" -ne 1 ]; then
+	EXTRA="${USER}"
+fi
+
+if [ "${tree}" != "." ]; then
+	cd "${tree}"
+fi
+
+if [ -z "${nogit}" ] || [ "${nogit}" -ne 1 ]; then
+	EXTRA="`gitextra \"${EXTRA}\" . ${version}`"
+fi
+
+${PRINTF} "${EXTRA}"
